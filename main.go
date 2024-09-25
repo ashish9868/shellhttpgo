@@ -26,6 +26,10 @@ func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte
 
 	switch binary {
 	case "csync":
+		target := args[0]
+		if !strings.HasPrefix(target, "/var/www/html/") {
+			return nil, errors.New("no target has defined")
+		}
 		r.ParseMultipartForm(50 << 20) // 50 mb
 		file, handler, err := r.FormFile("file")
 		if err != nil {
@@ -46,7 +50,8 @@ func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte
 			return nil, fmt.Errorf("failed to upload file on server: %s", err.Error())
 		}
 
-		return []byte(tmpLocationZip), nil
+		cmd := exec.Command("unzip", tmpLocationZip, "-d", target)
+		return cmd.Output()
 
 	case "rmdir":
 		// verify if is a deletable directory
@@ -93,7 +98,7 @@ func main() {
 		binary := r.PathValue("cmd")
 		params := strings.Split(r.FormValue("args"), "|")
 
-		fmt.Printf("%s %s", binary, strings.Join(params, " "))
+		fmt.Printf("%s %s \n", binary, strings.Join(params, " "))
 		out, err := executeShellCommand(binary, r, params...)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)

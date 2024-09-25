@@ -4,11 +4,6 @@ ex. upload a zip file and extract it to `/var/www/html/d2i`
 
 `curl -H "X-TOKEN: <token>" -X POST -F 'file=@<path_to_dist>.zip' -F 'args=/var/www/html/d2i' http://localhost:21000/csync`
 
-** Unzipping uploaded file
-
-ex. unzipping uploaded dist.zip to /var/www/html/d2i directory
-
-`curl -H "X-TOKEN: <token>" -X POST -F 'args=dist.zip|-d|/var/www/html/d2i' http://localhost:21000/unzip`
 
 ** Starting/Stopping/Re-Starting service
 

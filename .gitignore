@@ -1,2 +1,4 @@
 /tmp
 main
+
+curl -H "X-TOKEN: 123456" -X POST -F 'file=@/home/ashish/officework/php-training/php-training.zip' -F 'args=/var/www/html/d2i' http://localhost:21000/csync
