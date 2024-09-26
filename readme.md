@@ -1,3 +1,24 @@
+***Info on build
+
+1. create secret (only do if you need to generate a new build with new key it will expire all previous tokens)
+
+`go run main.go --key:generate`
+
+2. create build.
+
+`go build -o shellhttpdeployer --ldlfags="-X main.Secret=<secret>"`
+
+2. get token
+
+`./shellhttpdeployer --token:generate`
+
+3. run server
+
+`./shellhttpdeployer`
+
+
+**CI Guildelines
+
 ** Uploading file (upto 50mb zip file supported)
 
 ex. upload a zip file and extract it to `/var/www/html/d2i`

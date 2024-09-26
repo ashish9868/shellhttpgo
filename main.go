@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,9 +12,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-const TOKEN string = "123456"
+var Secret string
 
 func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte, error) {
 	allowed_cmds := []string{"ls", "ll", "rmdir", "systemctl", "rm", "csync"}
@@ -87,10 +91,63 @@ func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte
 	}
 }
 
+func createRandomKey() string {
+	buff := make([]byte, 200)
+	rand.Read(buff)
+	return hex.EncodeToString(buff)
+}
+
+func createToken(params []string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"params": strings.Join(params, "|"),
+	})
+	o, err := token.SignedString([]byte(Secret))
+
+	if err != nil {
+		fmt.Printf("Unable to create token: %s\n", err.Error())
+		return ""
+	}
+	return o
+}
+
+func parseToken(tokenString string) (*jwt.MapClaims, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(Secret), nil
+	})
+	if err != nil {
+		fmt.Printf("token is invalid : %s\n", err.Error())
+		return nil, err
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		return &claims, nil
+	} else {
+		return nil, errors.New("claim cannot be verified")
+	}
+}
+
 func main() {
+	args := os.Args
+	println(strings.Join(args, " "))
+	if slices.Contains(args, "--token:generate") {
+		println("Please copy the following secret carefully and keep it safe\n")
+		println(createToken(args))
+		println("")
+		return
+	}
+
+	if slices.Contains(args, "--key:generate") {
+		print(createRandomKey())
+		return
+	}
+
 	http.HandleFunc("/{cmd}", func(w http.ResponseWriter, r *http.Request) {
 		token := strings.Trim(r.Header.Get("X-Token"), " ")
-		if token != TOKEN {
+		_, err := parseToken(token)
+		if len(token) > 5 && err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("Unauthorized\n"))
 			return

@@ -1,0 +1,13 @@
+#!/bin/bash
+
+file="shellhttpdeployer"
+
+if [ -f "$file" ] ; then
+    rm "$file"
+fi
+
+sleep 1
+KEY=$(cat secret.txt)
+
+go mod tidy
+go build -o ./shellhttpdeployer --ldflags="-X main.Secret=$KEY"
