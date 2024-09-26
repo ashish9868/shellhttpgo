@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -99,7 +100,8 @@ func createRandomKey() string {
 
 func createToken(params []string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"params": strings.Join(params, "|"),
+		"params":    strings.Join(params, "|"),
+		"createdAt": time.Now(),
 	})
 	o, err := token.SignedString([]byte(Secret))
 
@@ -134,7 +136,7 @@ func main() {
 	println(strings.Join(args, " "))
 	if slices.Contains(args, "--token:generate") {
 		println("Please copy the following secret carefully and keep it safe\n")
-		println(createToken(args))
+		println(createToken(args[slices.Index(args, "--token:generate"):]))
 		println("")
 		return
 	}
