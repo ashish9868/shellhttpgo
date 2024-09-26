@@ -56,6 +56,12 @@ func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte
 		}
 
 		cmd := exec.Command("unzip", tmpLocationZip, "-d", target)
+
+		// fix permissions
+		exec.Command("chown", "www-data:www-data", "-R", target).Output()
+		exec.Command("find", target, "-type", "d", "-exec", "0755", "{}").Output()
+		exec.Command("find", target, "-type", "f", "-exec", "0644", "{}").Output()
+
 		return cmd.Output()
 
 	case "rmdir":
