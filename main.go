@@ -147,9 +147,14 @@ func main() {
 	}
 
 	http.HandleFunc("/{cmd}", func(w http.ResponseWriter, r *http.Request) {
+		if strings.ToUpper(r.Method) != "POST" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("Unauthorized: 405\n"))
+			return
+		}
 		token := strings.Trim(r.Header.Get("X-Token"), " ")
 		_, err := parseToken(token)
-		if len(token) > 5 && err != nil {
+		if len(token) < 5 || err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("Unauthorized\n"))
 			return
