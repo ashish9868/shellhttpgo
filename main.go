@@ -1,8 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,170 +11,206 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var Secret string
-
-func executeShellCommand(binary string, r *http.Request, args ...string) ([]byte, error) {
-	allowed_cmds := []string{"ls", "ll", "rmdir", "systemctl", "rm", "csync"}
-	if !slices.Contains(allowed_cmds, binary) {
-		return nil, errors.New("commandh invalid or not allowed")
-	}
-	// trim args
-	for index, param := range args {
-		args[index] = strings.Trim(param, "")
-	}
-
-	switch binary {
-	case "csync":
-		target := args[0]
-		if !strings.HasPrefix(target, "/var/www/html/") {
-			return nil, errors.New("no target has defined")
-		}
-		r.ParseMultipartForm(50 << 20) // 50 mb
-		file, handler, err := r.FormFile("file")
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve the file: %s", err.Error())
-		}
-		defer file.Close()
-
-		tmpLocationZip := filepath.Join("/tmp", handler.Filename)
-		dst, err := os.Create(tmpLocationZip)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upload file on server: %s", err.Error())
-		}
-		defer dst.Close()
-
-		// Copy the file content to the destination
-		_, err = io.Copy(dst, file)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upload file on server: %s", err.Error())
-		}
-
-		cmd := exec.Command("unzip", tmpLocationZip, "-d", target)
-
-		// fix permissions
-		exec.Command("chown", "www-data:www-data", "-R", target).Output()
-		exec.Command("find", target, "-type", "d", "-exec", "0755", "{}").Output()
-		exec.Command("find", target, "-type", "f", "-exec", "0644", "{}").Output()
-
-		return cmd.Output()
-
-	case "rmdir":
-		// verify if is a deletable directory
-		dir := args[0]
-		if !strings.HasPrefix(dir, "/var/www/html") && dir != "/var/www/html" && dir != "/var/www/html/default" {
-			return nil, errors.New("invalid directory path or not allowed")
-		}
-		cmd := exec.Command("rm", "-rf", dir)
-		return cmd.Output()
-	case "rm":
-		file := args[0]
-		if !strings.HasPrefix(file, "/var/www/html") && !strings.HasPrefix(file, "/var/www/html/default") {
-			return nil, errors.New("files cannot be deleted in given directory")
-		}
-		cmd := exec.Command("rm", file)
-		return cmd.Output()
-	case "systemctl":
-		action := args[0]
-		if !slices.Contains([]string{"restart", "start", "stop"}, action) {
-			return nil, errors.New("only restart|start|stop actions are allowed")
-		}
-		cmd := exec.Command(binary, args...)
-		return cmd.Output()
-	case "ls":
-		cmd := exec.Command(binary, "-a")
-		return cmd.Output()
-	case "ll":
-		cmd := exec.Command(binary, "-a")
-		return cmd.Output()
-	default:
-		cmd := exec.Command(binary)
-		return cmd.Output()
-	}
+type MyCustomClaims struct {
+	WorkDir string `json:"workDir"`
+	jwt.RegisteredClaims
 }
 
-func createRandomKey() string {
-	buff := make([]byte, 200)
-	rand.Read(buff)
-	return hex.EncodeToString(buff)
-}
+var key = os.Getenv("HTTPDEPLOYKEY")
 
-func createToken(params []string) string {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"params":    strings.Join(params, "|"),
-		"createdAt": time.Now(),
-	})
-	o, err := token.SignedString([]byte(Secret))
+func createToken(workDir string) *string {
+	if len(key) < 50 {
+		fmt.Println("Either key is missing or length is below 50")
+		return nil
+	}
+	claims := MyCustomClaims{
+		WorkDir: workDir,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	o, err := token.SignedString([]byte(key))
 
 	if err != nil {
 		fmt.Printf("Unable to create token: %s\n", err.Error())
-		return ""
+		return nil
 	}
-	return o
+	return &o
 }
 
-func parseToken(tokenString string) (*jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(Secret), nil
+func parseToken(tokenString string) (*MyCustomClaims, error) {
+	if len(key) < 50 {
+		fmt.Println("Either key is missing or length is below 50")
+		return nil, fmt.Errorf("Either key is missing or length is below 50")
+	}
+
+	token, err := jwt.ParseWithClaims(tokenString, &MyCustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(key), nil
 	})
+
 	if err != nil {
 		fmt.Printf("token is invalid : %s\n", err.Error())
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(jwt.MapClaims); ok {
-		return &claims, nil
+	if claims, ok := token.Claims.(*MyCustomClaims); ok {
+		return claims, nil
 	} else {
 		return nil, errors.New("claim cannot be verified")
 	}
 }
 
+func sendError(w http.ResponseWriter, message string) {
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write([]byte(message))
+}
+
+func sendSuccess(w http.ResponseWriter, message string) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(message))
+}
+
+func hasDirectoryInArgs(args []string) bool {
+	hasDir := false
+	for _, arg := range args {
+		_, err := os.Stat(arg)
+		if err == nil {
+			hasDir = true
+			break
+		}
+	}
+	return hasDir
+}
+
+func hasUnSafeCommand(binary string) bool {
+	unsafe := false
+	list := []string{"bash", "sh", "csh", "cat", "dd", ">", "wget", "find", "sudo"}
+	for _, l := range list {
+		if l == binary {
+			unsafe = true
+			break
+		}
+	}
+	return unsafe
+}
+
 func main() {
 	args := os.Args
-	println(strings.Join(args, " "))
-	if slices.Contains(args, "--token:generate") {
+	if slices.Contains(args, "--createtoken") {
+		commandIndex := slices.Index(args, "--createtoken")
+		workDir := ""
+		if len(args) < commandIndex+1 {
+			println("\n Sorry you should provide a workdir ex <binary> --createtoken /var/www/html/yourworkdir \n")
+			return
+		}
+
+		workDir = args[commandIndex+1]
+		if !strings.HasPrefix(workDir, "/var/www/html") {
+			println("\n Sorry you should provide a workdir ex <binary> --token:generate /var/www/html/yourworkdir \n")
+			return
+		}
+
 		println("Please copy the following secret carefully and keep it safe\n")
-		println(createToken(args[slices.Index(args, "--token:generate"):]))
+		token := createToken(workDir)
+		println(*token)
 		println("")
 		return
 	}
 
-	if slices.Contains(args, "--key:generate") {
-		print(createRandomKey())
-		return
-	}
-
 	http.HandleFunc("/{cmd}", func(w http.ResponseWriter, r *http.Request) {
+		errMul := r.ParseMultipartForm(300 << 20) // 10MB
+		err := r.ParseForm()
+
+		if err != nil || errMul != nil {
+			sendError(w, "Unable to parse form body")
+			return
+		}
+
 		if strings.ToUpper(r.Method) != "POST" {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("Unauthorized: 405\n"))
+			sendError(w, "Method not supported")
 			return
 		}
 		token := strings.Trim(r.Header.Get("X-Token"), " ")
-		_, err := parseToken(token)
-		if len(token) < 5 || err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("Unauthorized\n"))
-			return
-		}
-		binary := r.PathValue("cmd")
-		params := strings.Split(r.FormValue("args"), "|")
 
-		fmt.Printf("%s %s \n", binary, strings.Join(params, " "))
-		out, err := executeShellCommand(binary, r, params...)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error()))
+		claims, err := parseToken(token)
+
+		if claims == nil {
+			sendError(w, "Unauthorized - claims")
 			return
 		}
-		w.Write(out)
+
+		if len(token) < 5 || err != nil {
+			sendError(w, "Unauthorized"+err.Error())
+			return
+		}
+
+		binary := r.PathValue("cmd")
+		args := strings.Trim(r.FormValue("args"), " ")
+
+		if hasDirectoryInArgs(strings.Split(args, " ")) {
+			sendError(w, "you cannot use directories directly {WORKDIR} var to replace it with working directory ex. args = {WORKDIR}/folder")
+			return
+		}
+
+		args = strings.ReplaceAll(args, "{WORKDIR}", claims.WorkDir)
+
+		file, handler, fileUploadErr := r.FormFile("file")
+
+		if fileUploadErr == nil {
+			defer file.Close()
+			tmpLocation := filepath.Join(claims.WorkDir, handler.Filename)
+			dst, createError := os.Create(tmpLocation)
+			if createError != nil {
+				sendError(w, createError.Error())
+				return
+			}
+			defer dst.Close()
+			// Copy the file content to the destination
+			_, err = io.Copy(dst, file)
+			if err != nil {
+				sendError(w, err.Error())
+				return
+			}
+			sendSuccess(w, "Uploaded successfully")
+			return
+		}
+
+		if len(binary) < 1 {
+			sendError(w, "No binary supplied")
+			return
+		}
+
+		if hasUnSafeCommand(binary) {
+			sendError(w, "Dangerous op not allowed.")
+			return
+		}
+
+		if !strings.HasPrefix(claims.WorkDir, "/var/www/html") {
+			sendError(w, "Workdir is incorrect, can't use service")
+			return
+		}
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+
+		fmt.Printf("%s %s \n", binary, args)
+
+		binary = "/usr/bin/" + binary
+		cmd := exec.Command(binary, strings.Split(args, " ")...)
+		cmd.Dir = claims.WorkDir
+		cmd.Stderr = &stdout
+		cmd.Stdout = &stdout
+
+		cmdError := cmd.Run()
+
+		if cmdError != nil {
+			sendError(w, "\n"+stdout.String()+" \n"+stderr.String()+"\n"+cmdError.Error())
+			return
+		}
+
+		sendSuccess(w, "\n"+stdout.String()+" \n"+stderr.String())
 	})
 	// Start the server
 	port := ":21000"

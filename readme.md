@@ -6,7 +6,7 @@
 
 2. create build.
 
-`go build -o shellhttpdeployer --ldlfags="-X main.Secret=<secret>"`
+`go build -o shellhttpdeployer --ldflags="-X main.Secret=<secret>"`
 
 2. get token
 
