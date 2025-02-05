@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -20,10 +21,10 @@ type MyCustomClaims struct {
 	jwt.RegisteredClaims
 }
 
-var key = os.Getenv("HTTPDEPLOYKEY")
+var Secret string
 
 func createToken(workDir string) *string {
-	if len(key) < 50 {
+	if len(Secret) < 50 {
 		fmt.Println("Either key is missing or length is below 50")
 		return nil
 	}
@@ -31,7 +32,7 @@ func createToken(workDir string) *string {
 		WorkDir: workDir,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	o, err := token.SignedString([]byte(key))
+	o, err := token.SignedString([]byte(Secret))
 
 	if err != nil {
 		fmt.Printf("Unable to create token: %s\n", err.Error())
@@ -41,13 +42,13 @@ func createToken(workDir string) *string {
 }
 
 func parseToken(tokenString string) (*MyCustomClaims, error) {
-	if len(key) < 50 {
+	if len(Secret) < 50 {
 		fmt.Println("Either key is missing or length is below 50")
 		return nil, fmt.Errorf("Either key is missing or length is below 50")
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &MyCustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(key), nil
+		return []byte(Secret), nil
 	})
 
 	if err != nil {
@@ -198,7 +199,14 @@ func main() {
 		fmt.Printf("%s %s \n", binary, args)
 
 		binary = "/usr/bin/" + binary
-		cmd := exec.Command(binary, strings.Split(args, " ")...)
+
+		var cmd *exec.Cmd
+		if binary == "/usr/bin/systemctl" {
+			args += binary
+			cmd = exec.Command("sudo", strings.Split(args, " ")...)
+		} else {
+			cmd = exec.Command(binary, strings.Split(args, " ")...)
+		}
 		cmd.Dir = claims.WorkDir
 		cmd.Stderr = &stdout
 		cmd.Stdout = &stdout
@@ -213,9 +221,15 @@ func main() {
 		sendSuccess(w, "\n"+stdout.String()+" \n"+stderr.String())
 	})
 	// Start the server
+	server := &http.Server{
+		Addr:         ":21000",
+		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 5 * time.Minute,
+		IdleTimeout:  5 * time.Minute,
+	}
 	port := ":21000"
 	fmt.Printf("Starting server on %s...\n", port)
-	if err := http.ListenAndServe(port, nil); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		fmt.Printf("Failed to start server: %s\n", err)
 	}
 }
