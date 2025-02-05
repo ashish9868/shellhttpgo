@@ -202,7 +202,7 @@ func main() {
 
 		var cmd *exec.Cmd
 		if binary == "/usr/bin/systemctl" {
-			args += binary
+			args = binary + " " + args
 			cmd = exec.Command("sudo", strings.Split(args, " ")...)
 		} else {
 			cmd = exec.Command(binary, strings.Split(args, " ")...)
